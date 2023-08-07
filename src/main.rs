@@ -7,6 +7,7 @@ use std::path::Path;
 use color::Color;
 use framebuffer::{Framebuffer, KdMode, VarScreeninfo};
 use freedesktop_desktop_entry::DesktopEntry;
+use structopt::StructOpt;
 use termion::raw::IntoRawMode;
 use thiserror::Error;
 
@@ -21,6 +22,13 @@ mod buffer;
 mod color;
 mod draw;
 mod greetd;
+
+#[derive(StructOpt, Debug)]
+struct Opts {
+    // The path to the file to read
+    #[structopt(short, long, parse(from_os_str))]
+    target: std::path::PathBuf,
+}
 
 #[derive(PartialEq, Copy, Clone)]
 enum Mode {
@@ -40,6 +48,7 @@ enum Error {
     Io(#[from] std::io::Error),
 }
 
+#[derive(Debug)]
 struct Target {
     name: String,
     exec: Vec<String>,
@@ -95,8 +104,8 @@ impl<'a> LoginManager<'a> {
             dimensions,
             mode: Mode::EditingUsername,
             greetd,
+            target_index: targets.len() - 1, // TODO: remember last user selection
             targets,
-            target_index: 1, // TODO: remember last user selection
             var_screen_info: &fb.var_screen_info,
             should_refresh: false,
         }
@@ -421,6 +430,39 @@ impl<'a> LoginManager<'a> {
 }
 
 fn main() {
+    let args = Opts::from_args();
+
+    let mut targets: Vec<Target> = ["/usr/share/wayland-sessions", "/usr/share/xsessions"]
+        .iter()
+        .flat_map(fs::read_dir)
+        .flatten()
+        .flatten()
+        .flat_map(|dir_entry| Target::load(dir_entry.path()))
+        .collect();
+
+    if args.target.try_exists().is_ok_and(|exists| exists) {
+        if let Some(path) = args.target.to_str() {
+            let name = if let Some(name) = args.target.file_name() {
+                if let Some(name) = name.to_str() {
+                    name.to_owned()
+                } else {
+                    path.to_owned()
+                }
+            } else {
+                path.to_owned()
+            };
+            let mut vec = vec![Target {
+                name,
+                exec: vec![path.to_owned()],
+            }];
+            targets.append(&mut vec);
+        }
+    }
+
+    if targets.is_empty() {
+        panic!("No sessions configured. Make sure there are entries in either /usr/share/wayland-sessions, /usr/share/xsessions or pass the --target option.");
+    }
+
     let mut framebuffer = Framebuffer::new("/dev/fb0").expect("unable to open framebuffer device");
 
     let w = framebuffer.var_screen_info.xres;
@@ -433,14 +475,6 @@ fn main() {
     let _ = Framebuffer::set_kd_mode(KdMode::Graphics).expect("unable to enter graphics mode");
 
     let greetd = greetd::GreetD::new();
-
-    let targets = ["/usr/share/wayland-sessions", "/usr/share/xsessions"]
-        .iter()
-        .flat_map(fs::read_dir)
-        .flatten()
-        .flatten()
-        .flat_map(|dir_entry| Target::load(dir_entry.path()))
-        .collect();
 
     let mut lm = LoginManager::new(&mut framebuffer, (w, h), (1024, 168), greetd, targets);
 
