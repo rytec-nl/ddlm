@@ -27,7 +27,7 @@ mod greetd;
 struct Opts {
     // The path to the file to read
     #[structopt(short, long, parse(from_os_str))]
-    target: std::path::PathBuf,
+    target: Option<std::path::PathBuf>,
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -429,6 +429,27 @@ impl<'a> LoginManager<'a> {
     }
 }
 
+fn target_from_arg(target: std::path::PathBuf) -> Option<Target> {
+    if target.try_exists().is_ok_and(|exists| exists) {
+        if let Some(path) = target.to_str() {
+            let path = path.to_owned();
+            let mut name = path.clone();
+
+            if let Some(n) = target.file_name() {
+                if let Some(n) = n.to_str() {
+                    name = n.to_owned();
+                }
+            }
+
+            return Some(Target {
+                name,
+                exec: vec![path],
+            });
+        }
+    }
+    None
+}
+
 fn main() {
     let args = Opts::from_args();
 
@@ -440,22 +461,9 @@ fn main() {
         .flat_map(|dir_entry| Target::load(dir_entry.path()))
         .collect();
 
-    if args.target.try_exists().is_ok_and(|exists| exists) {
-        if let Some(path) = args.target.to_str() {
-            let name = if let Some(name) = args.target.file_name() {
-                if let Some(name) = name.to_str() {
-                    name.to_owned()
-                } else {
-                    path.to_owned()
-                }
-            } else {
-                path.to_owned()
-            };
-            let mut vec = vec![Target {
-                name,
-                exec: vec![path.to_owned()],
-            }];
-            targets.append(&mut vec);
+    if let Some(target) = args.target {
+        if let Some(target) = target_from_arg(target) {
+            targets.append(&mut vec![target]);
         }
     }
 
